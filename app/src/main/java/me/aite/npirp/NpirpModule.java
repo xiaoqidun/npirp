@@ -20,6 +20,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.view.Gravity;
 import android.view.View;
@@ -144,6 +145,17 @@ public final class NpirpModule extends XposedModule {
         try {
             String activityName =
                     "com.android.packageinstaller.PackageInstallerActivity";
+            String packageUtilName = "com.android.packageinstaller.PackageUtil";
+            Class<?> packageUtilClass = Class.forName(
+                    packageUtilName,
+                    false,
+                    classLoader
+            );
+            Class<?> appSnippetClass = Class.forName(
+                    packageUtilName + "$AppSnippet",
+                    false,
+                    classLoader
+            );
             Class<?> activityClass = Class.forName(activityName, false, classLoader);
             Class<?> permissionsClass = Class.forName(
                     "com.android.packageinstaller.AppSecurityPermissions",
@@ -166,7 +178,6 @@ public final class NpirpModule extends XposedModule {
                     PackageInfo.class
             );
             Field packageInfo = accessibleField(activityClass, "mPkgInfo");
-            Field appInfo = accessibleField(activityClass, "mAppInfo");
             Method getPermissionCount = accessibleMethod(
                     permissionsClass,
                     "getPermissionCount"
@@ -177,9 +188,12 @@ public final class NpirpModule extends XposedModule {
                     int.class,
                     Activity.class
             );
-            Method startInstallConfirm = accessibleMethod(
-                    activityClass,
-                    "startInstallConfirm"
+            Method initSnippetForNewApp = accessibleMethod(
+                    packageUtilClass,
+                    "initSnippetForNewApp",
+                    Activity.class,
+                    appSnippetClass,
+                    int.class
             );
             int containerId = accessibleField(idClass, "ad_layout").getInt(null);
             int noPermissionsId = accessibleField(idClass, "no_permissions").getInt(null);
@@ -210,13 +224,13 @@ public final class NpirpModule extends XposedModule {
                     accessibleField(idClass, "entrance_indicator").getInt(null)
             };
 
-            hook(startInstallConfirm)
-                    .setId(hookId(activityName, "startInstallConfirm", 0))
+            hook(initSnippetForNewApp)
+                    .setId(hookId(packageUtilName, "initSnippetForNewApp", 0))
                     .setPriority(PRIORITY_HIGHEST)
                     .setExceptionMode(ExceptionMode.PROTECTIVE)
                     .intercept(chain -> {
                         Object result = chain.proceed();
-                        Activity activity = (Activity) chain.getThisObject();
+                        Activity activity = (Activity) chain.getArg(0);
                         PackageInfo info = (PackageInfo) packageInfo.get(activity);
                         View containerView = activity.findViewById(containerId);
                         if (info == null || !(containerView instanceof LinearLayout container)) {
@@ -232,7 +246,16 @@ public final class NpirpModule extends XposedModule {
                         );
                         TextView question = permissionsView.findViewById(noPermissionsId);
                         if (question != null) {
-                            boolean update = appInfo.get(activity) != null;
+                            boolean update;
+                            try {
+                                activity.getPackageManager().getApplicationInfo(
+                                        info.packageName,
+                                        PackageManager.ApplicationInfoFlags.of(0)
+                                );
+                                update = true;
+                            } catch (PackageManager.NameNotFoundException ignored) {
+                                update = false;
+                            }
                             int questionId;
                             if (update) {
                                 questionId = permissionCount == 0
